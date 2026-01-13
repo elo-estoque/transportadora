@@ -3,18 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Central do Frete</title>
+    <title>Central do Frete | Elo Brindes</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; padding: 50px; }
-        .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 500px; }
-        h2 { text-align: center; color: #333; }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; color: #666; }
-        input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
-        button { width: 100%; padding: 12px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; transition: 0.3s; }
-        button:hover { background-color: #218838; }
-        #resultado { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 5px; display: none; }
-        .item-cotacao { background: white; padding: 10px; margin-bottom: 8px; border-left: 4px solid #007bff; border-radius: 3px; }
+        /* Estilo Dark Mode inspirado no seu App Streamlit */
+        body { font-family: 'Segoe UI', sans-serif; background-color: #050505; color: #E5E7EB; display: flex; justify-content: center; padding: 40px; }
+        .container { background: #151515; padding: 30px; border-radius: 12px; border: 1px solid #333; width: 100%; max-width: 500px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        h2 { text-align: center; color: #E31937; margin-bottom: 20px; }
+        label { display: block; margin-bottom: 5px; color: #aaa; font-size: 0.9em; }
+        input { width: 100%; padding: 12px; background-color: #252525; border: 1px solid #444; color: white; border-radius: 6px; box-sizing: border-box; margin-bottom: 15px; }
+        input:focus { outline: none; border-color: #E31937; }
+        
+        button { width: 100%; padding: 14px; background-color: #E31937; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: bold; transition: 0.3s; }
+        button:hover { background-color: #C2132F; }
+        
+        #resultado { margin-top: 25px; display: none; }
+        .metric-box { background: #222; padding: 15px; border-radius: 8px; border-left: 4px solid #E31937; margin-bottom: 15px; text-align: center; }
+        .metric-val { font-size: 24px; font-weight: bold; color: white; }
+        
+        .lista-cotacao { list-style: none; padding: 0; }
+        .item-cotacao { background: #1e1e1e; padding: 12px; margin-bottom: 8px; border-radius: 4px; display: flex; justify-content: space-between; border-bottom: 1px solid #333; }
+        .item-nome { font-weight: bold; }
+        .item-valor { color: #4cd137; }
+        .item-manual { color: #fbc531; }
     </style>
 </head>
 <body>
@@ -22,59 +32,45 @@
 <div class="container">
     <h2>🚚 Central do Frete</h2>
     
-    <div class="form-group">
-        <label>Peso (kg)</label>
-        <input type="number" id="peso" step="0.1" placeholder="Ex: 10.5">
+    <label>Peso (kg)</label>
+    <input type="number" id="peso" step="0.1" placeholder="0.0">
+    
+    <div style="display: flex; gap: 10px;">
+        <div><label>Altura (m)</label><input type="number" id="altura" step="0.01"></div>
+        <div><label>Largura (m)</label><input type="number" id="largura" step="0.01"></div>
     </div>
     
-    <div class="form-group">
-        <label>Altura (m)</label>
-        <input type="number" id="altura" step="0.01" placeholder="Ex: 1.50">
+    <div style="display: flex; gap: 10px;">
+        <div><label>Comp. (m)</label><input type="number" id="comprimento" step="0.01"></div>
+        <div><label>Qtd.</label><input type="number" id="quantidade" value="1"></div>
     </div>
 
-    <div class="form-group">
-        <label>Largura (m)</label>
-        <input type="number" id="largura" step="0.01" placeholder="Ex: 0.80">
+    <button onclick="calcular()">COTAR AGORA</button>
+
+    <div id="resultado">
+        <div class="metric-box">
+            <div style="font-size: 12px; color: #888;">CUBAGEM CALCULADA</div>
+            <div class="metric-val" id="res-cubagem">0.000</div>
+        </div>
+        <ul class="lista-cotacao" id="lista"></ul>
     </div>
-
-    <div class="form-group">
-        <label>Comprimento (m)</label>
-        <input type="number" id="comprimento" step="0.01" placeholder="Ex: 1.20">
-    </div>
-
-    <div class="form-group">
-        <label>Quantidade</label>
-        <input type="number" id="quantidade" value="1">
-    </div>
-
-    <button onclick="calcularFrete()">Calcular Cotação</button>
-
-    <div id="resultado"></div>
 </div>
 
 <script>
-    async function calcularFrete() {
+    async function calcular() {
         const btn = document.querySelector('button');
-        const resDiv = document.getElementById('resultado');
-        
-        // Monta o JSON automaticamente pegando os valores dos inputs
-        const dados = {
-            peso: parseFloat(document.getElementById('peso').value),
-            altura: parseFloat(document.getElementById('altura').value),
-            largura: parseFloat(document.getElementById('largura').value),
-            comprimento: parseFloat(document.getElementById('comprimento').value),
-            quantidade: parseInt(document.getElementById('quantidade').value)
-        };
-
-        if (isNaN(dados.peso) || isNaN(dados.altura)) {
-            alert("Por favor, preencha todos os campos corretamente.");
-            return;
-        }
-
         btn.innerText = "Calculando...";
         
-        // Envia para o Python (Backend)
-        const response = await fetch('/cotar', {
+        const dados = {
+            peso: parseFloat(document.getElementById('peso').value) || 0,
+            altura: parseFloat(document.getElementById('altura').value) || 0,
+            largura: parseFloat(document.getElementById('largura').value) || 0,
+            comprimento: parseFloat(document.getElementById('comprimento').value) || 0,
+            quantidade: parseInt(document.getElementById('quantidade').value) || 1
+        };
+
+        // ATENÇÃO: Usar './cotar' (ponto barra) força o navegador a respeitar a subpasta atual
+        const response = await fetch('./cotar', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(dados)
@@ -82,21 +78,21 @@
 
         const json = await response.json();
         
-        // Formata a resposta para HTML amigável
-        let html = `<strong>Cubagem:</strong> ${json.cubagem_calculada.toFixed(4)}<br><br>`;
+        document.getElementById('res-cubagem').innerText = json.cubagem.toFixed(4);
         
-        json.cotacoes.forEach(cot => {
-            let valor = cot.valor_estimado ? `R$ ${cot.valor_estimado}` : cot.mensagem;
-            html += `
-            <div class="item-cotacao">
-                <strong>${cot.transportadora}</strong><br>
-                Status: ${valor}
-            </div>`;
+        let htmlLista = "";
+        json.cotacoes.forEach(c => {
+            let corClass = c.tipo === 'API' ? 'item-valor' : 'item-manual';
+            htmlLista += `
+            <li class="item-cotacao">
+                <span class="item-nome">${c.nome}</span>
+                <span class="${corClass}">${c.valor}</span>
+            </li>`;
         });
 
-        resDiv.style.display = 'block';
-        resDiv.innerHTML = html;
-        btn.innerText = "Calcular Cotação";
+        document.getElementById('lista').innerHTML = htmlLista;
+        document.getElementById('resultado').style.display = 'block';
+        btn.innerText = "COTAR AGORA";
     }
 </script>
 
