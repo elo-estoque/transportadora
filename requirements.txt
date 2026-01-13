@@ -1,7 +1,2 @@
-fastapi
-uvicorn
-requests
+streamlit
 pandas
-openpyxl
-pydantic
-jinja2
