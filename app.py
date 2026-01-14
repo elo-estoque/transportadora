@@ -1,14 +1,12 @@
 import streamlit as st
 import pandas as pd
 import requests
-import base64
 import os
 import random
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA (Deve ser a primeira linha) ---
-st.set_page_config(page_title="Cotação Frete", layout="wide", page_icon="🚚")
+# --- CONFIGURAÇÃO VISUAL ---
+st.set_page_config(page_title="Central do Frete - Debug", layout="wide", page_icon="🛠️")
 
-# Estilos CSS
 st.markdown("""
 <style>
     .stApp { background-color: #050505; color: #E5E7EB; }
@@ -18,36 +16,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. FUNÇÕES DE CÁLCULO ---
-
-def simular_frete(nome, cep_origem, cep_destino, peso, valor):
-    # Simulador matemático simples para quando não houver API
-    try:
-        dist = abs(int(cep_origem[:5]) - int(cep_destino[:5])) / 1000
-    except:
-        dist = 50
+# --- MENU LATERAL DE CONFIGURAÇÃO (DEBUG) ---
+with st.sidebar:
+    st.header("🛠️ Configuração Avançada")
+    st.write("Se a API der erro, tente trocar a URL abaixo:")
     
-    base = 45.00
-    frete = base + (peso * 0.9) + (valor * 0.005) + (dist * 0.1)
-    return frete, random.randint(3, 7)
-
-# --- 3. INTEGRAÇÃO CENTRAL DO FRETE ---
-def cotar_central_frete(dados):
-    # Pega token e limpa espaços vazios
-    token = os.getenv("CENTRAL_TOKEN", "").strip()
+    # Tenta pegar do Dokploy, mas deixa editar na tela
+    token_env = os.getenv("CENTRAL_TOKEN", "")
+    token_input = st.text_input("Seu Token", value=token_env, type="password")
     
+    # Lista de URLs prováveis para testar
+    urls_possiveis = [
+        "https://api.centraldofrete.com/v1/cotacao",      # Padrão API V1
+        "https://quotation.centraldofrete.com/v1/cotacao", # Padrão Gateway
+        "https://app.centraldofrete.com/api/v1/cotacao",   # Interna
+        "https://quotation.centraldofrete.com/v1/api/cotacao"
+    ]
+    url_selecionada = st.selectbox("Selecione a URL para testar:", urls_possiveis, index=0)
+    
+    st.info("💡 Dica: Verifique no painel da Central do Frete > Integrações qual é a URL exata fornecida para o seu token.")
+
+# --- FUNÇÃO CENTRAL DO FRETE (DINÂMICA) ---
+def cotar_central_frete(dados, url_api, token):
     if not token:
-        return [{"Transportadora": "⚠️ CONFIG", "Preço Final": "---", "Prazo": "-", "Tipo": "Sem Token no Dokploy"}]
+        return [{"Transportadora": "⚠️ S/ TOKEN", "Preço Final": "-", "Prazo": "-", "Tipo": "Preencha o Token ao lado"}]
 
-    # URL OFICIAL (A quotation deu 404, então voltamos para a API padrão)
-    url = "https://api.centraldofrete.com/v1/cotacao"
-    
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {token.strip()}",
         "Content-Type": "application/json"
     }
     
-    # Payload formatado estritamente como numero
+    # Payload formatado
     payload = {
         "cep_origem": str(dados['cep_origem']).replace("-",""),
         "cep_destino": str(dados['cep_dest']).replace("-",""),
@@ -62,14 +61,15 @@ def cotar_central_frete(dados):
     }
 
     try:
-        req = requests.post(url, headers=headers, json=payload, timeout=8)
+        req = requests.post(url_api, headers=headers, json=payload, timeout=8)
         
+        # SUCESSO
         if req.status_code == 200:
             data = req.json()
             opcoes = data.get('cotacao', {}).get('opcoes', [])
             
             if not opcoes:
-                return [{"Transportadora": "Central Frete", "Preço Final": "R$ 0.00", "Prazo": "-", "Tipo": "Nenhuma transp. atende o CEP"}]
+                return [{"Transportadora": "Central Frete", "Preço Final": "R$ 0.00", "Prazo": "-", "Tipo": "Nenhuma opção encontrada"}]
                 
             resultados = []
             for op in opcoes:
@@ -77,108 +77,56 @@ def cotar_central_frete(dados):
                     "Transportadora": op.get('transportadora', 'Central'),
                     "Preço Final": f"R$ {op.get('valor_frete', 0):.2f}",
                     "Prazo": f"{op.get('prazo_dias')} dias",
-                    "Tipo": "Central do Frete (API)"
+                    "Tipo": "API OK ✅"
                 })
             return resultados
         
+        # ERRO IDENTIFICADO
         else:
-            # Mostra o erro exato na tela
-            return [{"Transportadora": "⚠️ ERRO API", "Preço Final": f"Status {req.status_code}", "Prazo": "-", "Tipo": req.text[:40]}]
+            msg_erro = req.text[:100]
+            if "<html" in msg_erro: msg_erro = "Erro HTML (URL Errada)"
+            return [{"Transportadora": "⚠️ ERRO API", "Preço Final": f"Status {req.status_code}", "Prazo": "-", "Tipo": msg_erro}]
 
     except Exception as e:
-        return [{"Transportadora": "⚠️ ERRO CRÍTICO", "Preço Final": "---", "Prazo": "-", "Tipo": str(e)[:40]}]
+        return [{"Transportadora": "⚠️ FALHA", "Preço Final": "Exception", "Prazo": "-", "Tipo": str(e)[:30]}]
 
-# --- 4. INTEGRAÇÃO BRASPRESS ---
-def cotar_braspress(dados):
-    user = os.getenv("BRASPRESS_USER", "").strip()
-    pwd = os.getenv("BRASPRESS_PASS", "").strip()
+# --- INTERFACE PRINCIPAL ---
+st.title("🚚 Testador de Frete Real")
+
+with st.form("cotacao_form"):
+    c1, c2, c3, c4 = st.columns(4)
+    cep_origem = c1.text_input("CEP Origem", "01001-000")
+    cep_dest = c2.text_input("CEP Destino")
+    valor = c3.number_input("Valor Nota (R$)", 100.0)
+    qtd = c4.number_input("Qtd Volumes", 1)
     
-    if not user or not pwd:
-        return {"simulado": True}
-
-    url = "https://api.braspress.com/v1/cotacao/calcular/json"
-    auth = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+    d1, d2, d3, d4 = st.columns(4)
+    peso = d1.number_input("Peso Total (kg)", 1.0)
+    alt = d2.number_input("Altura (cm)", 20.0)
+    larg = d3.number_input("Largura (cm)", 20.0)
+    comp = d4.number_input("Comp (cm)", 20.0)
     
-    try:
-        req = requests.post(url, headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"}, json={
-            "cnpjRemetente": 12345678000199,
-            "cnpjDestinatario": int(dados['cnpj_dest']),
-            "modal": "R", "tipoFrete": "1",
-            "cepOrigem": int(dados['cep_origem'].replace("-","")),
-            "cepDestino": int(dados['cep_dest'].replace("-","")),
-            "vlrMercadoria": dados['valor'], "peso": dados['peso_real'], "volumes": dados['qtd'],
-            "cubagem": [{"altura": dados['alt']/100, "largura": dados['larg']/100, "comprimento": dados['comp']/100, "volumes": dados['qtd']}]
-        }, timeout=5)
+    btn = st.form_submit_button("COTAR AGORA")
+
+if btn:
+    if not cep_dest:
+        st.warning("Preencha o CEP de Destino")
+    else:
+        dados = {
+            "cep_origem": cep_origem, "cep_dest": cep_dest, 
+            "valor": valor, "peso_real": peso, "qtd": qtd,
+            "alt": alt, "larg": larg, "comp": comp
+        }
         
-        if req.status_code == 200:
-            r = req.json()
-            return {"simulado": False, "preco": r.get("totalFrete"), "prazo": r.get("prazo"), "transp": "BRASPRESS"}
-    except: pass
-    return {"simulado": True}
-
-# --- 5. INTERFACE PRINCIPAL ---
-st.title("🚚 Central do Frete")
-
-try:
-    with st.form("main_form"):
-        st.write("📍 **Rota e Carga**")
-        c1, c2, c3, c4 = st.columns(4)
-        cep_origem = c1.text_input("CEP Origem", "01001-000")
-        cep_dest = c2.text_input("CEP Destino")
-        cnpj = c3.text_input("CNPJ Destino")
-        valor = c4.number_input("Valor Nota (R$)", 100.0)
+        # Chama a função usando a URL selecionada no menu lateral
+        resultado = cotar_central_frete(dados, url_selecionada, token_input)
         
-        d1, d2, d3, d4, d5 = st.columns(5)
-        peso = d1.number_input("Peso (kg)", 1.0)
-        alt = d2.number_input("Alt (cm)", 64.0)
-        larg = d3.number_input("Larg (cm)", 40.0)
-        comp = d4.number_input("Comp (cm)", 15.0)
-        qtd = d5.number_input("Qtd", 5)
+        st.write("---")
+        st.subheader(f"Testando URL: `{url_selecionada}`")
         
-        btn_cotar = st.form_submit_button("CALCULAR FRETE")
-
-    if btn_cotar:
-        if not cep_dest:
-            st.warning("⚠️ Preencha o CEP de Destino!")
-        else:
-            with st.spinner("Consultando transportadoras..."):
-                dados = {
-                    "cep_origem": cep_origem, "cep_dest": cep_dest, "cnpj_dest": cnpj or "00000000000000",
-                    "valor": valor, "peso_real": peso * qtd, "qtd": qtd,
-                    "alt": alt, "larg": larg, "comp": comp
-                }
-                
-                lista_final = []
-                
-                # 1. Central do Frete
-                lista_final.extend(cotar_central_frete(dados))
-                
-                # 2. Braspress Direta
-                res_bp = cotar_braspress(dados)
-                if not res_bp['simulado']:
-                    lista_final.append({"Transportadora": "BRASPRESS", "Preço Final": f"R$ {res_bp['preco']:.2f}", "Prazo": f"{res_bp['prazo']} dias", "Tipo": "API Direta"})
-                else:
-                    # Só simula se a Central não trouxe Braspress
-                    if not any("BRASPRESS" in x['Transportadora'].upper() for x in lista_final):
-                        v, p = simular_frete("BRASPRESS", cep_origem, cep_dest, dados['peso_real'], valor)
-                        lista_final.append({"Transportadora": "BRASPRESS", "Preço Final": f"R$ {v:.2f}", "Prazo": f"{p} dias", "Tipo": "Simulador"})
-                
-                # 3. Outras Simuladas
-                for t in ["RODONAVES", "JAMEF", "TW", "GLOBAL"]:
-                    if not any(t in x['Transportadora'].upper() for x in lista_final):
-                        v, p = simular_frete(t, cep_origem, cep_dest, dados['peso_real'], valor)
-                        lista_final.append({"Transportadora": t, "Preço Final": f"R$ {v:.2f}", "Prazo": f"{p} dias", "Tipo": "Simulador"})
-
-                # Exibição
-                vals = [float(x['Preço Final'].replace('R$ ','')) for x in lista_final if 'R$' in x['Preço Final']]
-                melhor = min(vals) if vals else 0
-                
-                k1, k2 = st.columns(2)
-                k1.markdown(f"<div class='metric-card'><h3>Opções</h3><h1>{len(lista_final)}</h1></div>", unsafe_allow_html=True)
-                k2.markdown(f"<div class='metric-card'><h3>Melhor Preço</h3><h1 style='color:#E31937'>R$ {melhor:.2f}</h1></div>", unsafe_allow_html=True)
-                
-                st.write("")
-                st.dataframe(pd.DataFrame(lista_final), use_container_width=True)
-
-except Exception as e:
-    st.error(f"Erro Crítico no App: {e}")
+        df = pd.DataFrame(resultado)
+        st.dataframe(df, use_container_width=True)
+        
+        if "API OK" in str(resultado):
+            st.success(f"🎉 SUCESSO! A URL correta é: {url_selecionada}")
+            st.caption("Agora você pode fixar essa URL no seu código final.")
