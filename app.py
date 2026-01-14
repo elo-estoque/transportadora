@@ -31,8 +31,8 @@ def calcular_metricas(peso_unit, alt, larg, comp, qtd):
 
 # --- INTEGRAÇÃO 1: BRASPRESS (DIRETA) ---
 def cotar_braspress(dados):
-    user = os.getenv("BRASPRESS_USER")
-    pwd = os.getenv("BRASPRESS_PASS")
+    user = os.getenv("BRASPRESS_USER", "").strip()
+    pwd = os.getenv("BRASPRESS_PASS", "").strip()
     
     if not user or not pwd:
         return {"simulado": True, "erro": "Credenciais ENV ausentes"}
@@ -78,36 +78,39 @@ def cotar_braspress(dados):
     except:
         return {"simulado": True, "erro": "Conexão"}
 
-# --- INTEGRAÇÃO 2: CENTRAL DO FRETE (HUB) - COM DEBUG ---
+# --- INTEGRAÇÃO 2: CENTRAL DO FRETE (HUB) - CORRIGIDO ---
 def cotar_central_frete(dados):
     """
-    Tenta conectar na Central do Frete.
-    Se falhar, retorna o erro visível para a tabela.
+    Tenta conectar na Central do Frete com tratamento de erro e limpeza de token.
     """
-    token = os.getenv("CENTRAL_TOKEN")
+    # 1. PEGA O TOKEN E LIMPA ESPAÇOS INVISÍVEIS (.strip())
+    token_cru = os.getenv("CENTRAL_TOKEN", "")
+    token = token_cru.strip()
     
-    # 1. Teste de Token (Verifica se o Dokploy leu a variável)
     if not token:
         return [{
             "Transportadora": "⚠️ ERRO CONFIG",
             "Preço Final": "---",
             "Prazo": "---",
-            "Tipo": "TOKEN NÃO ENCONTRADO"
+            "Tipo": "TOKEN VAZIO"
         }]
 
-    url = "https://api.centraldofrete.com/v1/cotacao"
+    # 2. DEFINIÇÃO DA URL (Tentativa Dupla se necessário)
+    # URL Padrão Oficial
+    url_principal = "https://api.centraldofrete.com/v1/cotacao"
+    
     headers = {
-        "Authorization": f"Bearer {token}", # Bearer é o padrão deles
+        "Authorization": f"Bearer {token}", 
         "Content-Type": "application/json"
     }
     
-    # Payload rigoroso para evitar erro 400
+    # Payload
     payload = {
         "cep_origem": str(dados['cep_origem']).replace("-",""),
         "cep_destino": str(dados['cep_dest']).replace("-",""),
         "valornotafiscal": float(dados['valor']),
         "volumes": [{
-            "peso": float(dados['peso_real']) / int(dados['qtd']), # Peso unitário
+            "peso": float(dados['peso_real']) / int(dados['qtd']), 
             "altura": int(dados['alt']),     
             "largura": int(dados['larg']),
             "comprimento": int(dados['comp']),
@@ -116,11 +119,26 @@ def cotar_central_frete(dados):
     }
 
     try:
-        req = requests.post(url, headers=headers, json=payload, timeout=8)
+        # TENTATIVA 1: URL Principal
+        req = requests.post(url_principal, headers=headers, json=payload, timeout=10)
         
-        # 2. Sucesso
+        # Se der 404, tenta a URL Alternativa (algumas contas usam esta)
+        if req.status_code == 404:
+            url_backup = "https://quotation.centraldofrete.com/v1/cotacao" # URL Legada
+            req = requests.post(url_backup, headers=headers, json=payload, timeout=10)
+
+        # 3. Processamento da Resposta
         if req.status_code == 200:
             data = req.json()
+            # Verifica erro lógico dentro do JSON (ex: erro: true)
+            if data.get('error'):
+                 return [{
+                    "Transportadora": "⚠️ ERRO DADOS",
+                    "Preço Final": "R$ 0.00",
+                    "Prazo": "-",
+                    "Tipo": f"{data.get('message', 'Erro desconhecido')}"
+                }]
+
             opcoes = data.get('cotacao', {}).get('opcoes', [])
             
             if not opcoes:
@@ -128,30 +146,38 @@ def cotar_central_frete(dados):
                     "Transportadora": "Central Frete",
                     "Preço Final": "R$ 0.00",
                     "Prazo": "-",
-                    "Tipo": "Sem opções de frete disponíveis"
+                    "Tipo": "Sem opções para este CEP"
                 }]
                 
             resultados = []
             for op in opcoes:
+                nome_transp = op.get('transportadora', 'Central')
+                # Ignora Correios se quiser, ou formata nomes
                 resultados.append({
-                    "Transportadora": op.get('transportadora', 'Central'),
+                    "Transportadora": nome_transp,
                     "Preço Final": f"R$ {op.get('valor_frete', 0):.2f}",
                     "Prazo": f"{op.get('prazo_dias')} dias",
-                    "Tipo": "Central do Frete (API)"
+                    "Tipo": "Central do Frete"
                 })
             return resultados
         
-        # 3. Erro de Resposta da API
+        # 4. Erros de HTTP
+        elif req.status_code == 401:
+             return [{
+                "Transportadora": "⚠️ ERRO TOKEN",
+                "Preço Final": "401",
+                "Prazo": "-",
+                "Tipo": "Token Inválido/Expirado"
+            }]
         else:
             return [{
                 "Transportadora": "⚠️ ERRO API",
                 "Preço Final": f"Status {req.status_code}",
                 "Prazo": "-",
-                "Tipo": f"Msg: {req.text[:30]}" # Mostra o começo do erro
+                "Tipo": f"URL: {req.url} | {req.text[:20]}" # Mostra qual URL falhou
             }]
             
     except Exception as e:
-        # 4. Erro de Conexão/Código
         return [{
             "Transportadora": "⚠️ ERRO CRÍTICO",
             "Preço Final": "---",
@@ -171,7 +197,7 @@ def simular_frete(nome, cep_origem, cep_destino, peso, valor):
     return frete, random.randint(3, 7)
 
 # --- INTERFACE PRINCIPAL ---
-st.title("🚚 Central do Frete Integrada (Debug Mode)")
+st.title("🚚 Central do Frete Integrada (Debug V2)")
 
 with st.form("form_cotacao"):
     st.markdown("<div class='section-title'>📍 Rota e Fiscal</div>", unsafe_allow_html=True)
@@ -195,7 +221,7 @@ if btn_cotar:
     if not cep_dest:
         st.warning("⚠️ Digite o CEP de destino.")
     else:
-        with st.spinner("Processando APIs..."):
+        with st.spinner("Conectando..."):
             
             dados_carga = {
                 "cep_origem": cep_origem, 
@@ -209,12 +235,11 @@ if btn_cotar:
             
             lista_final = []
             
-            # 1. Tenta Central do Frete (Prioridade)
-            # Retorna lista de transportadoras OU erro visível
+            # 1. CENTRAL DO FRETE
             res_central = cotar_central_frete(dados_carga)
             lista_final.extend(res_central)
             
-            # 2. Tenta Braspress Direta (Se configurado)
+            # 2. BRASPRESS DIRETA
             res_bp = cotar_braspress(dados_carga)
             if not res_bp['simulado']:
                 lista_final.append({
@@ -224,15 +249,16 @@ if btn_cotar:
                     "Tipo": "API Direta"
                 })
             else:
-                # Se falhar a Braspress direta, adiciona simulada
-                v, p = simular_frete("BRASPRESS", cep_origem, cep_dest, dados_carga['peso_real'], valor_nota)
-                lista_final.append({"Transportadora": "BRASPRESS", "Preço Final": f"R$ {v:.2f}", "Prazo": f"{p} dias", "Tipo": "Simulador (Sem Key)"})
+                # Adiciona Braspress como simulada se a API falhar ou não tiver key
+                # MAS SÓ SE ELA NÃO VEIO PELA CENTRAL DO FRETE
+                ja_tem_bp = any("BRASPRESS" in item['Transportadora'].upper() for item in lista_final)
+                if not ja_tem_bp:
+                    v, p = simular_frete("BRASPRESS", cep_origem, cep_dest, dados_carga['peso_real'], valor_nota)
+                    lista_final.append({"Transportadora": "BRASPRESS", "Preço Final": f"R$ {v:.2f}", "Prazo": f"{p} dias", "Tipo": "Simulador (Sem Key)"})
 
-            # 3. Adiciona Simuladores para as outras que ainda não temos API
+            # 3. OUTRAS (Se não vieram pela Central)
             for t in ["RODONAVES", "JAMEF", "TW", "GLOBAL"]:
-                # Verifica se essa transp já veio pela Central do Frete para não duplicar
                 ja_tem = any(t.upper() in item['Transportadora'].upper() for item in lista_final)
-                
                 if not ja_tem:
                     v, p = simular_frete(t, cep_origem, cep_dest, dados_carga['peso_real'], valor_nota)
                     lista_final.append({
@@ -242,10 +268,9 @@ if btn_cotar:
                         "Tipo": "Simulador (Sem Key)"
                     })
 
-            # Exibe
+            # Exibe Tabela
             st.divider()
             
-            # Filtra valores válidos para o KPI de "Melhor Preço"
             vals = []
             for x in lista_final:
                 try:
@@ -258,11 +283,8 @@ if btn_cotar:
 
             k1, k2, k3 = st.columns(3)
             k1.markdown(f"<div class='metric-card'><h3>Peso Taxável</h3><h1>{peso_tax:.2f} kg</h1></div>", unsafe_allow_html=True)
-            k2.markdown(f"<div class='metric-card'><h3>Opções Encontradas</h3><h1>{len(lista_final)}</h1></div>", unsafe_allow_html=True)
+            k2.markdown(f"<div class='metric-card'><h3>Opções</h3><h1>{len(lista_final)}</h1></div>", unsafe_allow_html=True)
             k3.markdown(f"<div class='metric-card'><h3>Melhor Preço</h3><h1 style='color:#E31937'>R$ {melhor:.2f}</h1></div>", unsafe_allow_html=True)
             
             st.write("")
-            df = pd.DataFrame(lista_final)
-            
-            # Formatação condicional simples para destacar erros
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(lista_final), use_container_width=True, hide_index=True)
